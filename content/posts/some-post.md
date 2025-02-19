@@ -1,8 +1,6 @@
 +++
 title = "Ballista"
 date = 2025-02-20
-[taxonomies]
-tags = ["datafusion", "ballista"]
 authors = ["zeb"] 
 +++
 
