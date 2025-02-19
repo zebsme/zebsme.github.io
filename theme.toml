@@ -1,0 +1,20 @@
+name = "zeb"
+description = "interested in building system software"
+license = "AGPL-3.0"
+homepage = "https://github.com/janbaudisch/zola-sam"
+min_version = "0.4.0"
+demo = "https://zola-sam.janbaudisch.dev"
+
+[extra]
+show_word_count = true
+show_reading_time = true
+
+date_format = "%a %b %e, %Y"
+
+home = "home"
+
+sam_bottom_menu = true
+
+[author]
+name = "zeb"
+homepage = "https://zebyoomii.com"
