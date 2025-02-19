@@ -7,10 +7,16 @@
         <loc>https://zebsme.github.io/about/</loc>
     </url>
     <url>
+        <loc>https://zebsme.github.io/authors/</loc>
+    </url>
+    <url>
         <loc>https://zebsme.github.io/posts/</loc>
     </url>
     <url>
         <loc>https://zebsme.github.io/posts/some-post/</loc>
         <lastmod>2025-02-20</lastmod>
+    </url>
+    <url>
+        <loc>https://zebsme.github.io/tags/</loc>
     </url>
 </urlset>
