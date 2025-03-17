@@ -1,0 +1,32 @@
+base_url = "https://zebsme.github.io"
+title = "ZEB"
+
+compile_sass = true
+
+build_search_index = false
+
+theme = "no-style-please"
+
+taxonomies = [
+    { name = "tags", rss = true },
+    { name = "authors", rss = true }
+]
+
+[extra]
+show_word_count = true
+show_reading_time = true
+
+date_format = "%a %b %e, %Y"
+
+home = "home"
+
+sam_menu = [
+    { text = "posts", link = "/posts" },
+    { text = "about", link = "/about" },
+    { text = "github", link = "https://github.com/zebsme" }
+]
+
+sam_bottom_menu = true
+
+[extra.sam_footer]
+text = "footer note"
