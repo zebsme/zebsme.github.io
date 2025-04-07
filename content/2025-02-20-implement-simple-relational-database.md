@@ -9,7 +9,19 @@ authors = ["zeb"]
 - [ ] Logical Plan
 - [ ] 
 
-实现一个简单的关系型数据库之前，首先要明确需要哪些组件
+## Sql Support
+
+### Tokenizer
+
+第一步将SQL查询字符串转换为表示关键字、字面量、操作符。。。的tokens：
+
+TODO
+
+然后需要一个Tokenizer，给定输入SELECT a+b FROM C 我们期望输出如下：
+
+TODO
+
+### 
 
 在一般的数据库系统中，一个sql从输入到执行的流程如下图所示：
 
