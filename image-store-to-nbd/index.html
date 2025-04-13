@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta content="IE=edge" http-equiv="X-UA-Compatible"/>
+        <meta content="text/html; charset=UTF-8" http-equiv="content-type"/>
+        <meta content="width=device-width, initial-scale=1" name="viewport"/>
+
+        
+        
+        
+
+        
+
+        
+
+        
+
+        
+        
+        
+
+        <title>镜像仓库对接nbd</title>
+        
+        <meta name="title" content="镜像仓库对接nbd">
+        
+        
+        <meta name="generator" content="Zola v0.16.1">
+
+        <meta property="og:type" content="website">
+        <meta property="og:url" content="https://zebsme.github.io/image-store-to-nbd/">
+        <meta property="og:site_name" content="Blog">
+        <meta property="og:title" content="镜像仓库对接nbd">
+        
+        
+
+        
+        
+        <meta property="twitter:card" content="summary_large_image">
+        <meta property="twitter:url" content="https://zebsme.github.io/image-store-to-nbd/">
+        <meta property="twitter:title" content="镜像仓库对接nbd">
+        
+        
+        
+        
+        <link rel="canonical" href="https://zebsme.github.io/image-store-to-nbd/">
+        
+        <script type="application/ld+json">
+            {
+                
+                "url":"https://zebsme.github.io/image-store-to-nbd/",
+                "@type":"WebSite",
+                "headline":"镜像仓库对接nbd",
+                "name":"镜像仓库对接nbd",
+                
+                "@context":"https://schema.org"
+            }
+        </script>
+        
+        
+        
+        <link rel="stylesheet" href="https://zebsme.github.io/style.css"/>
+        
+    </head>
+    <body theme="auto">
+        <div class="w">
+            <header>
+                
+                
+<p><a href="..">..</a>/image-store-to-nbd</p>
+<p class="post-meta"><time datetime="2023-05-20">2023-05-20</time></p>
+<h1>镜像仓库对接nbd</h1>
+
+            </header>
+            <main class="page-content" aria-label="Content">
+                
+
+
+
+<h1 id="bei-jing">背景</h1>
+<h2 id="jing-xiang-cang-ku-shi-shen-me"><strong>镜像仓库是什么？</strong></h2>
+<p><code>分层、切片、内容寻址（Content Addressing）的备份存储</code></p>
+<h2 id="an-li">案例</h2>
+<ol>
+<li>使用云平台在Ceph存储上创建VM</li>
+<li>创建镜像至镜像仓库</li>
+<li>用2中的镜像创建VM，超时</li>
+</ol>
+<p>手动调用API创建成功，但耗时接近40分钟</p>
+<h2 id="xian-you-shi-xian"><strong>现有实现</strong></h2>
+<p>重新拼接每一层镜像，放到 $TopDIR/export 目录，通过 HTTP 方式暴露给用户，在时间和空间上都不够经济。</p>
+<p>直接把镜像仓库中维护的分层、切片镜像以 nbd 方式（只读）暴露出来，可以大大提高如下体验：</p>
+<ol>
+<li>从镜像仓库导出镜像到 Ceph 性能预期可以提高 N 倍(N &gt; 5)</li>
+<li>镜像仓库导出镜像时间和空间都得到提升（不再需要临时文件）</li>
+</ol>
+<h2 id="ke-xing-fang-an">可行方案</h2>
+<h3 id="xiu-gai-qemu-nbd-zhi-du-bao-lu-jing-xiang">修改 qemu-nbd 只读暴露镜像</h3>
+<p>修改 qemu/qemu-nbd, 增加新的 BlockDriver 直接读取镜像仓库中存放的分层、切片镜像。需要处理的逻辑包括：</p>
+<ol>
+<li>通过镜像仓库的 image manifest 文件来处理 backing chain 逻辑；</li>
+<li>通过镜像仓库的 blob manifest 文件来处理 chunk 读取逻辑；</li>
+</ol>
+<p>假想示例，对于镜像 zstore://foo/bar：</p>
+<pre data-lang="shell" class="language-shell "><code class="language-shell" data-lang="shell">$ qemu-nbd -f imf2 -p 10810 foo&#x2F;bar
+</code></pre>
+<p>好处：最好的性能，且 qemu/qemu-nbd/qemu-io 都可以利用。</p>
+<h3 id="tong-guo-fuse-zhi-du-bao-lu-jing-xiang">通过 FUSE 只读暴露镜像</h3>
+<p>通过 FUSE 把镜像只读暴露成 qcow2 backing chain, 这样就不需要再修改 qemu/qemu-nbd.
+只是把上面需要修改的逻辑完全放在了 FUSE 应用里。</p>
+<p>假想示例，对于镜像 zstore://foo/bar：</p>
+<pre data-lang="shell" class="language-shell "><code class="language-shell" data-lang="shell">$ chunkfs -conf &#x2F;data&#x2F;zstore&#x2F;zstore.yaml  -dst &#x2F;tmp&#x2F;foo&#x2F; -img foo&#x2F;bar
+
+$ ls &#x2F;tmp&#x2F;foo
+6f0a5968aa249a.qcow2 bdfcb51fd7aa00.qcow2 f233c4f119343.qcow2 
+
+$ qemu-nbd -r -f qcow2 -p 10810 &#x2F;tmp&#x2F;foo&#x2F;6f0a5968aa249a.qcow2 
+</code></pre>
+<p>好处：影响面较小，足够好的性能，且可以给镜像仓库的导出功能复用（快、且省空间）。</p>
+<h2 id="shi-xian">实现</h2>
+<p>基于 golang 第三方库 github.com/jacobsa/fuse, 这样可以重用现有镜像仓库解析 imf2 文件以及寻址 chunk 的代码。</p>
+<h3 id="dentry-de-gou-zao">dentry 的构造</h3>
+<p>首先需要循环读取 image manifest, 生成 dentry 记录。这样，opendir() 后读取到的是当前镜像对应的 backing chain 列表。文件名为 image-id.qcow2, 对于 foo/bar，这里 'foo' 是 namespace, 'bar' 是 image-id。 注意，虽然文件名后缀是 qcow2，但本身可能是 raw/iso 格式（base image)，本算法因为下面红框内的处理，依然生效。</p>
+<p><img src="https://raw.githubusercontent.com/zeb-yeung/oss/master/86ca77ccded622892daaff3db2240c08.png" alt="86ca77ccded622892daaff3db2240c08" /></p>
+<h3 id="wen-jian-i-o-de-chu-li">文件 I/O 的处理</h3>
+<p>针对文件的读，计算 read 的 offset/range，映射成对  chunk 的读写再返回。如果 offset/range 在当前 qcow2 header 的 backing file 指向的范围，则处理相应的内容，填充为 parent 的 "image-id.qcow2".
+针对文件的写，直接报错 EPERM（不允许写）。</p>
+<pre data-lang="go" class="language-go "><code class="language-go" data-lang="go">type chunkFS struct {
+ 	fuseutil.NotImplementedFileSystem
+}
+func (fs *chunkFS) ReadFile(
+	ctx context.Context,
+	op *fuseops.ReadFileOp) error {
+}
+ 
+cfg := &amp;fuse.MountConfig{
+	ReadOnly: true,
+	FSName:   &quot;zstore&quot;,
+ 	Subtype:  &quot;zstore&quot;,
+}
+</code></pre>
+<h3 id="partial-read">Partial Read</h3>
+<p>Qcow2 文件的 cluster size 一般设置为 64KB 到 1MB 之间。镜像仓库的切片大小有两种：4MB 或者 64MB. 理论上，如果按 cluster 读取，一个 read() 调用不跨 cluster 的情况下，每次读取都会在一个切片里。但实现在用 FUSE 处理读的时候，也处理了跨切片的情况。解决方法也很简单：每次只会读一个切片内的数据，并返回读取的字节数。</p>
+<p><img src="https://raw.githubusercontent.com/zeb-yeung/oss/master/8a41a906b6edd6c034d3f0324ef59db9.png" alt="8a41a906b6edd6c034d3f0324ef59db9" /></p>
+<p>因为 read() 的定义是允许 partial 返回的，因此这种情况下，上层调用者会自动再次读取下一个切片的内容。</p>
+<h3 id="zi-dong-xiu-zheng-backing-file">自动修正 backing file</h3>
+<p>要让 qcow2 文件的 backing file 自动指向其在 FUSE 挂载点中的 parent, 代码需要解析 qcow2 header 中指向的 backing file offset, 并在读取相应的内容后，替换其中的内容为 parent qcow2 文件路径。另外还需要处理 qcow2 header 中 backing file size 字段的值。根据 qcow2 格式定义，backing file name 会保存在第一个 cluster。</p>
+<p><img src="https://raw.githubusercontent.com/zeb-yeung/oss/master/cd37638b94d6130198aa7f62a0a83e04.png" alt="cd37638b94d6130198aa7f62a0a83e04" /></p>
+<h2 id="yi-zhi-wen-ti">已知问题</h2>
+<p>CentOS Stream 8 用 Go 1.18.5 编译的 FUSE 程序在 CentOS 7.6 (kernel 3.10.0-957) 上运行时，挂载的目录无法访问：</p>
+<p><code>ECONNREFUSED</code></p>
+<h2 id="shu-ju-mian-yan-zheng">数据面验证</h2>
+<p>镜像仓库目前具有镜像导出功能：重新把分层、发片镜像拼装回去之后，再压缩合并为单个镜像文件。这目前也是导出到 Ceph 的一个中间步骤（因此比较耗时、耗 CPU、耗 I/O）。
+测试用例可以分别用新、老方式导出镜像，然后再用 qemu-img compare 对镜像数据做对比。</p>
+
+
+            </main>
+            <footer>
+                
+<p class="taxonomies">
+
+</p>
+
+                
+            </footer>
+        </div>
+    </body>
+</html>
+        

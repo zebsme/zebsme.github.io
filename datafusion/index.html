@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta content="IE=edge" http-equiv="X-UA-Compatible"/>
+        <meta content="text/html; charset=UTF-8" http-equiv="content-type"/>
+        <meta content="width=device-width, initial-scale=1" name="viewport"/>
+
+        
+        
+        
+
+        
+
+        
+
+        
+
+        
+        
+        
+
+        <title>实现简单的关系型数据库</title>
+        
+        <meta name="title" content="实现简单的关系型数据库">
+        
+        
+        <meta name="generator" content="Zola v0.16.1">
+
+        <meta property="og:type" content="website">
+        <meta property="og:url" content="https://zebsme.github.io/datafusion/">
+        <meta property="og:site_name" content="Blog">
+        <meta property="og:title" content="实现简单的关系型数据库">
+        
+        
+
+        
+        
+        <meta property="twitter:card" content="summary_large_image">
+        <meta property="twitter:url" content="https://zebsme.github.io/datafusion/">
+        <meta property="twitter:title" content="实现简单的关系型数据库">
+        
+        
+        
+        
+        <link rel="canonical" href="https://zebsme.github.io/datafusion/">
+        
+        <script type="application/ld+json">
+            {
+                
+                "url":"https://zebsme.github.io/datafusion/",
+                "@type":"WebSite",
+                "headline":"实现简单的关系型数据库",
+                "name":"实现简单的关系型数据库",
+                
+                "@context":"https://schema.org"
+            }
+        </script>
+        
+        
+        
+        <link rel="stylesheet" href="https://zebsme.github.io/style.css"/>
+        
+    </head>
+    <body theme="auto">
+        <div class="w">
+            <header>
+                
+                
+<p><a href="..">..</a>/datafusion</p>
+<p class="post-meta"><time datetime="2025-03-10">2025-03-10</time></p>
+<h1>实现简单的关系型数据库</h1>
+
+            </header>
+            <main class="page-content" aria-label="Content">
+                
+
+
+
+<p>Datafusion</p>
+<p>Join的实现</p>
+<h2 id="type-system">type system</h2>
+<p>use apache arrow as the basis of our type system</p>
+<h2 id="logical-plan">logical Plan</h2>
+<p>serialization</p>
+<ul>
+<li>
+<p>json 等</p>
+</li>
+<li>
+<p>与语言无关的序列化格式 Avro Thrift Protocol Buffers</p>
+</li>
+<li>
+<p>substrait 关系代数的统一标准</p>
+</li>
+</ul>
+<p>// 初始化每个分区的 BooleanBufferBuilder
+let num_rows = batch.num_rows();
+let mut builders: Vec<BooleanBufferBuilder> = (0..*partitions)
+.map(|_| {
+let mut builder = BooleanBufferBuilder::new(num_rows);
+builder.append_n(num_rows, false); // 初始填充 false
+builder
+})
+.collect();</p>
+<pre data-lang="rust" class="language-rust "><code class="language-rust" data-lang="rust">                &#x2F;&#x2F; 单次循环设置所有分区的掩码
+                for (idx, &amp;hash) in hash_buffer.iter().enumerate() {
+                    let partition = (hash % *partitions as u64) as usize;
+                    builders[partition].set_bit(idx, true); &#x2F;&#x2F; 直接设置位值
+                }
+
+                &#x2F;&#x2F; 转换为 BooleanArray
+                let masks: Vec&lt;BooleanArray&gt; = builders
+                    .into_iter()
+                    .map(|mut builder| {
+                        BooleanArray::from(builder.finish())
+                    })
+                    .collect();
+                timer.done();
+
+                let partitioner_timer = &amp;self.timer;
+                &#x2F;&#x2F; 使用 filter 生成分区数据
+                let it = masks
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, mask)| mask.true_count() &gt; 0)
+                    .map(move |(partition, mask)| {
+                        let _timer = partitioner_timer.timer();
+                        let columns = batch.columns()
+                            .iter()
+                            .map(|col| filter(col, &amp;mask).map_err(|e| DataFusionError::ArrowError(e, None)))
+                            .collect::&lt;Result&lt;Vec&lt;ArrayRef&gt;&gt;&gt;()?;
+                        RecordBatch::try_new(batch.schema(), columns)
+                            .map(|batch| (partition, batch)).map_err(|e| DataFusionError::ArrowError(e, None))
+                    });
+
+                Box::new(it)
+</code></pre>
+<p>// 2. 预分配列式缓冲区 (替代位掩码)
+let mut partition_buffers: Vec&lt;Vec&lt;Box<dyn ArrayBuilder>&gt;&gt; = (0..*partitions)
+.map(|<em>| {
+batch.schema().fields().iter()
+.map(|field| make_builder(field.data_type(), batch.num_rows()))
+.collect::&lt;Result&lt;Vec&lt;</em>&gt;&gt;&gt;()
+})
+.collect::&lt;Result&lt;Vec&lt;_&gt;&gt;&gt;()?;</p>
+<pre><code>                &#x2F;&#x2F; 3. 单次遍历填充数据
+                for (row_idx, &amp;hash) in hash_buffer.iter().enumerate() {
+                    let partition = (hash % *partitions as u64) as usize;
+                    for (col_idx, array) in batch.columns().iter().enumerate() {
+                        let builder = &amp;mut partition_buffers[partition][col_idx];
+                        append_value(array, row_idx, builder)?;
+                    }
+                }
+
+                &#x2F;&#x2F; Finished building index-arrays for output partitions
+                timer.done();
+
+                &#x2F;&#x2F; Borrowing partitioner timer to prevent moving `self` to closure
+                let partitioner_timer = &amp;self.timer;
+                &#x2F;&#x2F; let it = indices
+                &#x2F;&#x2F;     .into_iter()
+                &#x2F;&#x2F;     .enumerate()
+                &#x2F;&#x2F;     .filter_map(|(partition, indices)| {
+                &#x2F;&#x2F;         let indices: PrimitiveArray&lt;UInt32Type&gt; = indices.into();
+                &#x2F;&#x2F;         (!indices.is_empty()).then_some((partition, indices))
+                &#x2F;&#x2F;     })
+                &#x2F;&#x2F;     .map(move |(partition, indices)| {
+                &#x2F;&#x2F;         &#x2F;&#x2F; Tracking time required for repartitioned batches construction
+                &#x2F;&#x2F;         let _timer = partitioner_timer.timer();
+                &#x2F;&#x2F;
+                &#x2F;&#x2F;         &#x2F;&#x2F; Produce batches based on indices
+                &#x2F;&#x2F;         let columns = take_arrays(batch.columns(), &amp;indices, None)?;
+                &#x2F;&#x2F;
+                &#x2F;&#x2F;         let mut options = RecordBatchOptions::new();
+                &#x2F;&#x2F;         options = options.with_row_count(Some(indices.len()));
+                &#x2F;&#x2F;         let batch = RecordBatch::try_new_with_options(
+                &#x2F;&#x2F;             batch.schema(),
+                &#x2F;&#x2F;             columns,
+                &#x2F;&#x2F;             &amp;options,
+                &#x2F;&#x2F;         )
+                &#x2F;&#x2F;         .unwrap();
+                &#x2F;&#x2F;
+                &#x2F;&#x2F;         Ok((partition, batch))
+                &#x2F;&#x2F;     });
+                let schema = batch.schema();
+                let batches = partition_buffers
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, cols)| cols.iter().any(|c| c.len() &gt; 0))
+                    .map(move|(partition, cols)| {
+                        let _timer = partitioner_timer.timer();
+                        let arrays = cols.into_iter()
+                            .map(|mut b| b.finish())
+                            .collect::&lt;Vec&lt;ArrayRef&gt;&gt;();
+                        RecordBatch::try_new(schema.clone(), arrays)
+                            .map(|batch| (partition, batch))
+                            .map_err(|e| DataFusionError::ArrowError(e, None))
+                    });
+
+                Box::new(batches)
+            }
+        };
+    Ok(it)
+}
+
+&#x2F;&#x2F; return the number of output partitions
+fn num_partitions(&amp;self) -&gt; usize {
+    match self.state {
+        BatchPartitionerState::RoundRobin { num_partitions, .. } =&gt; num_partitions,
+        BatchPartitionerState::Hash { num_partitions, .. } =&gt; num_partitions,
+    }
+}
+</code></pre>
+<p>}
+// 修改 make_builder 函数以支持 Utf8View 类型
+fn make_builder(data_type: &amp;DataType, capacity: usize) -&gt; Result&lt;Box<dyn ArrayBuilder>, DataFusionError&gt; {
+match data_type {
+DataType::Int32 =&gt; Ok(Box::new(arrow::array::Int32Builder::with_capacity(capacity))),
+DataType::Utf8 =&gt; Ok(Box::new(arrow::array::StringBuilder::with_capacity(capacity, capacity * 8))),
+DataType::LargeUtf8 =&gt; Ok(Box::new(arrow::array::LargeStringBuilder::with_capacity(capacity, capacity * 8))),
+DataType::Utf8View =&gt; {
+// 需要 arrow 13.0.0 或更高版本
+Ok(Box::new(arrow::array::StringViewBuilder::with_capacity(capacity)))
+}
+_ =&gt; Err(DataFusionError::NotImplemented(format!("Unsupported type: {:?}", data_type))),
+}
+}</p>
+<p>// 修改 append_value 函数以支持 Utf8View 类型
+fn append_value(array: &amp;ArrayRef, index: usize, builder: &amp;mut Box<dyn ArrayBuilder>) -&gt; Result&lt;()&gt; {
+use arrow::array::*;
+match array.data_type() {
+DataType::Int32 =&gt; {
+let builder = builder.as_any_mut().downcast_mut::<Int32Builder>().unwrap();
+let value = array.as_any().downcast_ref::<Int32Array>().unwrap().value(index);
+builder.append_value(value)
+}
+DataType::Utf8 =&gt; {
+let builder = builder.as_any_mut().downcast_mut::<StringBuilder>().unwrap();
+let value = array.as_any().downcast_ref::<StringArray>().unwrap().value(index);
+builder.append_value(value)
+}
+DataType::LargeUtf8 =&gt; {
+let builder = builder.as_any_mut().downcast_mut::<LargeStringBuilder>().unwrap();
+let value = array.as_any().downcast_ref::<LargeStringArray>().unwrap().value(index);
+builder.append_value(value)
+}
+DataType::Utf8View =&gt; {
+let builder = builder.as_any_mut().downcast_mut::<StringViewBuilder>().unwrap();
+let view = array.as_any().downcast_ref::<StringViewArray>().unwrap().value(index);
+builder.append_value(view)
+}
+_ =&gt; return Err(DataFusionError::NotImplemented("Type not supported".into())),
+}
+Ok(())</p>
+
+
+            </main>
+            <footer>
+                
+<p class="taxonomies">
+
+</p>
+
+                
+            </footer>
+        </div>
+    </body>
+</html>
+        

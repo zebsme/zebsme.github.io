@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta content="IE=edge" http-equiv="X-UA-Compatible"/>
+        <meta content="text/html; charset=UTF-8" http-equiv="content-type"/>
+        <meta content="width=device-width, initial-scale=1" name="viewport"/>
+
+        
+        
+        
+
+        
+
+        
+
+        
+
+        
+        
+        
+
+        <title>Implement simple relational database</title>
+        
+        <meta name="title" content="Implement simple relational database">
+        
+        
+        <meta name="generator" content="Zola v0.16.1">
+
+        <meta property="og:type" content="website">
+        <meta property="og:url" content="https://zebsme.github.io/implement-simple-relational-database/">
+        <meta property="og:site_name" content="Blog">
+        <meta property="og:title" content="Implement simple relational database">
+        
+        
+
+        
+        
+        <meta property="twitter:card" content="summary_large_image">
+        <meta property="twitter:url" content="https://zebsme.github.io/implement-simple-relational-database/">
+        <meta property="twitter:title" content="Implement simple relational database">
+        
+        
+        
+        
+        <link rel="canonical" href="https://zebsme.github.io/implement-simple-relational-database/">
+        
+        <script type="application/ld+json">
+            {
+                
+                "url":"https://zebsme.github.io/implement-simple-relational-database/",
+                "@type":"WebSite",
+                "headline":"Implement simple relational database",
+                "name":"Implement simple relational database",
+                
+                "@context":"https://schema.org"
+            }
+        </script>
+        
+        
+        
+        <link rel="stylesheet" href="https://zebsme.github.io/style.css"/>
+        
+    </head>
+    <body theme="auto">
+        <div class="w">
+            <header>
+                
+                
+<p><a href="..">..</a>/implement-simple-relational-database</p>
+<p class="post-meta"><time datetime="2025-03-10">2025-03-10</time></p>
+<h1>Implement simple relational database</h1>
+
+            </header>
+            <main class="page-content" aria-label="Content">
+                
+
+
+
+<ul>
+<li><input disabled="" type="checkbox"/>
+Logical Plan</li>
+<li><input disabled="" type="checkbox"/>
+</li>
+</ul>
+<h2 id="sql-support">Sql Support</h2>
+<h3 id="tokenizer">Tokenizer</h3>
+<p>第一步将SQL查询字符串转换为表示关键字、字面量、操作符。。。的tokens：</p>
+<p>TODO</p>
+<p>然后需要一个Tokenizer，给定输入SELECT a+b FROM C 我们期望输出如下：</p>
+<p>TODO</p>
+<h3 id=""></h3>
+<p>在一般的数据库系统中，一个sql从输入到执行的流程如下图所示：</p>
+<p>lexer -&gt; parser -&gt; logical plan -&gt; physical plan -&gt; ...</p>
+<h6 id="-1"></h6>
+<p>从广义上来讲，query engine -&gt; data source。</p>
+<p>data source可以是in-memory 也可以是disk 也可以是</p>
+<p>How query engine work</p>
+<p>data type</p>
+<p>How query engine works</p>
+<p>disk-based 以及 memory</p>
+<ul>
+<li><input disabled="" type="checkbox"/>
+实现基于B+树的磁盘存储</li>
+</ul>
+<p>type system</p>
+<p>Logical Plan</p>
+<p>interface{</p>
+<p>​	schema()</p>
+<p>​	children()</p>
+<p>}</p>
+<p>用零个或者多个logical plan作为输入。可以通过children()接口直接得到子逻辑计划，便于遍历。</p>
+<h2 id="shi-xian-query-engine">实现query engine</h2>
+<p>实现一个语句，需要在执行流程的基础上进行考虑。以order by语句为例:</p>
+<p><code>[ORDER BY col_name [asc | desc] [, ...]]</code></p>
+<p>lexer添加DESC ASC ORDER BY关键字</p>
+<p>ast中Select结构体添加order_by字段 Vec&lt;String, Direction&gt;</p>
+<p>再增加executor中的Order node以及execute实现。</p>
+<p>projection</p>
+<p>lexer AS</p>
+<p>Select添加select Vec&lt;Expression，Option<String >&gt;</p>
+<p>Projection node</p>
+<h3 id="cross-join">Cross Join</h3>
+<pre data-lang="rust" class="language-rust "><code class="language-rust" data-lang="rust">Node::NestedLoopJoin {
+	left,
+	right,
+}
+</code></pre>
+<p>笛卡尔积</p>
+<h3 id="inner-join">Inner Join</h3>
+<pre data-lang="rust" class="language-rust "><code class="language-rust" data-lang="rust">Node::NestedLoopJoin {
+	left,
+	right,
+    predicate
+}
+</code></pre>
+<p>判断equal条件。判断的时候有一个递归。</p>
+<h3 id="outer-join">outer join</h3>
+<p>right join和left join都属于outer join。build plan的时候，如果是right join的话，直接交换位置，execute的时候只用处理一种情况。</p>
+<pre data-lang="rust" class="language-rust "><code class="language-rust" data-lang="rust">Node::NestedLoopJoin {
+	left,
+	right,
+	predicate,
+	outer,
+}
+</code></pre>
+<p>group by</p>
+<p>order by</p>
+<p>过滤条件</p>
+<p>having (对group by后的结果进行过滤)</p>
+<p>索引支持</p>
+<p>调研主流数据库的索引</p>
+<p>MVCC</p>
+<p>基于快照隔离</p>
+<p>获取的当前活跃事务列表可以视为一个快照，描述事务在开始时的全局状态。</p>
+<p>Txnwrite是中间状态，提交的时候要删掉txnwrite以及txnactive</p>
+<p>rollback的时候删掉version</p>
+<p>scan_prefix方法</p>
+<p>commit和rollback的时候获取txnwrite的位置 commit直接删掉txnwrite。rollback删掉txnwrite对应的version(key) 获取活跃列表也需要scan_prefix</p>
+<p>kv中list_table需要用table_name去扫描</p>
+<h3 id="suo-yin-de-zhi-chi">索引的支持</h3>
+<p>一行数据通过表名和主键值进行编码作为唯一id</p>
+<p>table_name column_name column_value -&gt; index(HashSet) 存放的是pk对应的value？</p>
+<h3 id="hashjoin">HashJoin</h3>
+<h3 id="-2"></h3>
+<p>内存设计</p>
+<p>磁盘设计</p>
+<p>Sql引擎</p>
+<h2 id="mvccshi-xian">MVCC实现</h2>
+<p>version 是否可见</p>
+<p>is_visible</p>
+<p>if self.active_versions.contains(key) {</p>
+<p>​	return false</p>
+<p>} else{</p>
+<p>​	version &lt;= self.version</p>
+<p>}</p>
+<p>insert into</p>
+<p>先去get_table</p>
+<p>get table的流程</p>
+<p>executor都通用的是txn的接口进行读写操作</p>
+<p>txn.get(Key::Table(table_name))</p>
+<p>txn.get中设定一个range，from 0 to当前txn id,MvccKey(key, 0) MvccKey(key, tnx.id)，这里的key是上面的Key::Table(table_name)，通过这个range在BTreeMap即keydir返回一个iterator。可以进行遍历，返回最大的visible version对应的value。再将value des为Table</p>
+<p>Table{</p>
+<p>name: String</p>
+<p>columns: Vec<Column></p>
+<p>}</p>
+<p>pub struct Column {
+pub name: String,
+pub datatype: DataType,
+pub nullable: bool,
+pub default: Option<Value>,
+pub primary_key: bool,
+pub index: bool,
+}</p>
+<p>这里的table 仅仅是schema</p>
+<p>TODO index in create_row</p>
+<p>再排列一下给出的列值以及列名</p>
+<p>接着create row Key::Row(table_name, pk_id)来标志一个row。检查这个行的有效性字段是否匹配，检查这个row是否存在，如果存在且可见，dumplicate data。再txn.set。最后维护索引。</p>
+
+
+            </main>
+            <footer>
+                
+<p class="taxonomies">
+
+</p>
+
+                
+            </footer>
+        </div>
+    </body>
+</html>
+        

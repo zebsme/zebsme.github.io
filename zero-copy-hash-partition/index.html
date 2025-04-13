@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta content="IE=edge" http-equiv="X-UA-Compatible"/>
+        <meta content="text/html; charset=UTF-8" http-equiv="content-type"/>
+        <meta content="width=device-width, initial-scale=1" name="viewport"/>
+
+        
+        
+        
+
+        
+
+        
+
+        
+
+        
+        
+        
+
+        <title>zero copy hash partition</title>
+        
+        <meta name="title" content="zero copy hash partition">
+        
+        
+        <meta name="generator" content="Zola v0.16.1">
+
+        <meta property="og:type" content="website">
+        <meta property="og:url" content="https://zebsme.github.io/zero-copy-hash-partition/">
+        <meta property="og:site_name" content="Blog">
+        <meta property="og:title" content="zero copy hash partition">
+        
+        
+
+        
+        
+        <meta property="twitter:card" content="summary_large_image">
+        <meta property="twitter:url" content="https://zebsme.github.io/zero-copy-hash-partition/">
+        <meta property="twitter:title" content="zero copy hash partition">
+        
+        
+        
+        
+        <link rel="canonical" href="https://zebsme.github.io/zero-copy-hash-partition/">
+        
+        <script type="application/ld+json">
+            {
+                
+                "url":"https://zebsme.github.io/zero-copy-hash-partition/",
+                "@type":"WebSite",
+                "headline":"zero copy hash partition",
+                "name":"zero copy hash partition",
+                
+                "@context":"https://schema.org"
+            }
+        </script>
+        
+        
+        
+        <link rel="stylesheet" href="https://zebsme.github.io/style.css"/>
+        
+    </head>
+    <body theme="auto">
+        <div class="w">
+            <header>
+                
+                
+<p><a href="..">..</a>/zero-copy-hash-partition</p>
+<p class="post-meta"><time datetime="2025-04-10">2025-04-10</time></p>
+<h1>zero copy hash partition</h1>
+
+            </header>
+            <main class="page-content" aria-label="Content">
+                
+
+
+
+<h1 id="qian-zhi-zhi-shi">前置知识</h1>
+<h2 id="coalescebatchesexec">CoalesceBatchesExec</h2>
+<p>定义如下:</p>
+<p><img src="https://raw.githubusercontent.com/zeb-yeung/oss/master/a4ae588008e23a25501b35c257836b8a.png" alt="a4ae588008e23a25501b35c257836b8a" /></p>
+<p>简言之，CoalesceBatchesExec是合并较小Record Batch的操作符。HashJoin、FilterExec以及HashRepartitionExec均有可能产生较小的Record Batch。</p>
+<p>datafusion/physical-optimizer/coalesce_batches.rs描述了相关逻辑:</p>
+<p><img src="https://raw.githubusercontent.com/zeb-yeung/oss/master/QQ_1744281005179.png" alt="QQ_1744281005179" /></p>
+<h1 id="bei-jing">背景</h1>
+<p>在 DataFusion 中，Hash Repartition操作是通过哈希一个或多个列，并使用hash % num_partitions 将它们划分到不同的分区中。</p>
+<p>现有的实现为每个分区生成相应的indices并进行take array的操作。但这样的操作相对昂贵，因为我们需要在数组的不同位置访问数组 num_partitions 次，导致缓存不高效（尤其是当分区数量较高时）。</p>
+<p>由于Hash Join可能产生小的Record Batches，RepartitionExec过后会进行CoalesceBatchesExec。</p>
+<h1 id="ke-xing-fang-fa">可行方法</h1>
+<ol>
+<li>Bitmask/filter is a bit slower than current implementation.</li>
+<li>Flattening the nested Vec can improve performance for some queries. However, for some other queries, it can actually slow things down, possibly due to increased memory or less efficient access patterns.</li>
+<li>Prefix sum requires random access，which leads to bad performance.</li>
+</ol>
+<p>这三种方法具体bench后性能反而要差一些。</p>
+<p>直接优化这段代码行不通，就有了接下来的想法。在Repartition过后，我们可以直接引用原Record Batches，增加一个列标志当前行是否处于当前分区。这样做有以下好处：</p>
+<ul>
+<li>避免了partition_iter中的take操作</li>
+<li>避免了RepartitionExec过后的CoalesceBatchesExec</li>
+</ul>
+<h1 id="shi-xian">实现</h1>
+<p>假想有两张表。</p>
+<p>t1:</p>
+<table><thead><tr><th style="text-align: center">T1_ID</th><th style="text-align: center">T1_name</th><th style="text-align: center">T1_Int</th></tr></thead><tbody>
+<tr><td style="text-align: center">11</td><td style="text-align: center">'a'</td><td style="text-align: center">1</td></tr>
+<tr><td style="text-align: center">22</td><td style="text-align: center">'b'</td><td style="text-align: center">2</td></tr>
+<tr><td style="text-align: center">33</td><td style="text-align: center">'c'</td><td style="text-align: center">3</td></tr>
+<tr><td style="text-align: center">44</td><td style="text-align: center">'d'</td><td style="text-align: center">4</td></tr>
+</tbody></table>
+<p>t2:</p>
+<table><thead><tr><th style="text-align: center">T2_id</th><th style="text-align: center">T2_name</th><th style="text-align: center">t2_int</th></tr></thead><tbody>
+<tr><td style="text-align: center">11</td><td style="text-align: center">'z'</td><td style="text-align: center">3</td></tr>
+<tr><td style="text-align: center">22</td><td style="text-align: center">'y'</td><td style="text-align: center">1</td></tr>
+<tr><td style="text-align: center">44</td><td style="text-align: center">'x'</td><td style="text-align: center">3</td></tr>
+<tr><td style="text-align: center">55</td><td style="text-align: center">'w'</td><td style="text-align: center">3</td></tr>
+</tbody></table>
+<p>现有sql语句:</p>
+<p><code>SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name &gt;= 'y';</code></p>
+<p>Physical plan 如下：</p>
+<p><img src="https://raw.githubusercontent.com/zeb-yeung/oss/master/3ec06c86fb5c3b15806c18c2ccdfe5b7.png" alt="3ec06c86fb5c3b15806c18c2ccdfe5b7" /></p>
+<p>根据上文的介绍，实现后physical plan变为：</p>
+<p><img src="https://raw.githubusercontent.com/zeb-yeung/oss/master/aef43f164dabdb2b94b8c2668b3efbcd.png" alt="aef43f164dabdb2b94b8c2668b3efbcd" /></p>
+<p>可以看到在RepartitionExec后无需进行CoalescesBatchesExec。</p>
+
+
+            </main>
+            <footer>
+                
+<p class="taxonomies">
+
+</p>
+
+                
+            </footer>
+        </div>
+    </body>
+</html>
+        

@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta content="IE=edge" http-equiv="X-UA-Compatible"/>
+        <meta content="text/html; charset=UTF-8" http-equiv="content-type"/>
+        <meta content="width=device-width, initial-scale=1" name="viewport"/>
+
+        
+        
+        
+
+        
+
+        
+
+        
+
+        
+        
+        
+
+        <title>Hash Join</title>
+        
+        <meta name="title" content="Hash Join">
+        
+        
+        <meta name="generator" content="Zola v0.16.1">
+
+        <meta property="og:type" content="website">
+        <meta property="og:url" content="https://zebsme.github.io/hash-join/">
+        <meta property="og:site_name" content="Blog">
+        <meta property="og:title" content="Hash Join">
+        
+        
+
+        
+        
+        <meta property="twitter:card" content="summary_large_image">
+        <meta property="twitter:url" content="https://zebsme.github.io/hash-join/">
+        <meta property="twitter:title" content="Hash Join">
+        
+        
+        
+        
+        <link rel="canonical" href="https://zebsme.github.io/hash-join/">
+        
+        <script type="application/ld+json">
+            {
+                
+                "url":"https://zebsme.github.io/hash-join/",
+                "@type":"WebSite",
+                "headline":"Hash Join",
+                "name":"Hash Join",
+                
+                "@context":"https://schema.org"
+            }
+        </script>
+        
+        
+        
+        <link rel="stylesheet" href="https://zebsme.github.io/style.css"/>
+        
+    </head>
+    <body theme="auto">
+        <div class="w">
+            <header>
+                
+                
+<p><a href="..">..</a>/hash-join</p>
+<p class="post-meta"><time datetime="2025-04-12">2025-04-12</time></p>
+<h1>Hash Join</h1>
+
+            </header>
+            <main class="page-content" aria-label="Content">
+                
+
+
+
+<p>Hash Join利用了哈希表查询的优势，实现了更好的并行化。</p>
+<h1 id="probe-side-vs-build-side">Probe Side vs Build Side</h1>
+<p>Hash Join有两个输入，Build Side和Probe Side。Build Side会加载到内存中构建哈希表，Probe Side会流式与该哈希表进行处理。根据此特点，更小的输入会作为Build Side。</p>
+<p>下图描述了Build Side哈希表与Probe Side batches进行处理的流程：</p>
+<p><img src="https://raw.githubusercontent.com/zeb-yeung/oss/master/9b24e1953723ff92e5bdd3a1f996a077.png" alt="9b24e1953723ff92e5bdd3a1f996a077" /></p>
+<h1 id="partition-mode">Partition Mode</h1>
+<p>CollectLeft：左表全量加载到内存中构建哈希表，被所有Probe Side的线程共享。</p>
+<p>Partitioned：左右表按照Join Keys进行哈希分区，再处理左右对应的分区。注意：左右分区数相同，且hash % num_partitions保证了相同的Join Keys一定在相对应的分区。</p>
+<p>Auto：在map_logical_node_to_physical中会初始化为Auto模式，后续Optimizer会根据统计信息选择最优策略：</p>
+<ul>
+<li>当左侧数据量小于配置阈值（包括字节大小和行数阈值）时，选择 CollectLeft ，否则Partitioned</li>
+<li>当数据量超过阈值时，选择 Partitioned</li>
+<li>统计信息不可用时，选择 Partitioned</li>
+</ul>
+<h1 id="zhi-xing">执行</h1>
+<p>举例说明执行阶段：</p>
+<p>有表t1 t2</p>
+<p>t1:</p>
+<table><thead><tr><th style="text-align: center">T1_id</th><th style="text-align: center">T1_name</th></tr></thead><tbody>
+<tr><td style="text-align: center">11</td><td style="text-align: center">'z'</td></tr>
+<tr><td style="text-align: center">22</td><td style="text-align: center">'y'</td></tr>
+<tr><td style="text-align: center">44</td><td style="text-align: center">'x'</td></tr>
+<tr><td style="text-align: center">55</td><td style="text-align: center">'w'</td></tr>
+</tbody></table>
+<p>t2:</p>
+<table><thead><tr><th style="text-align: center">T2_ID</th><th style="text-align: center">T2_name</th></tr></thead><tbody>
+<tr><td style="text-align: center">11</td><td style="text-align: center">'a'</td></tr>
+<tr><td style="text-align: center">22</td><td style="text-align: center">'b'</td></tr>
+<tr><td style="text-align: center">33</td><td style="text-align: center">'c'</td></tr>
+<tr><td style="text-align: center">44</td><td style="text-align: center">'d'</td></tr>
+</tbody></table>
+<p>现有sql语句:</p>
+<p><code>SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name &gt;= 'x';</code></p>
+<h3 id="jie-duan-1-gou-jian-build-side">阶段1：构建Build Side</h3>
+<p>因为有一个filter push down，t1和t2的数据量在filter后相比，t2更小一点，所以可能会swap inputs，将t2作为Build Side。</p>
+<p>根据Record Batches构建哈希表，t2_id作为Key，indices即索引作为Value。</p>
+<p>此时有Build Side：</p>
+<table><thead><tr><th style="text-align: center">indices</th><th style="text-align: center">t2_ID</th><th style="text-align: center">T2_NAME</th></tr></thead><tbody>
+<tr><td style="text-align: center">0</td><td style="text-align: center">11</td><td style="text-align: center">'a'</td></tr>
+<tr><td style="text-align: center">1</td><td style="text-align: center">22</td><td style="text-align: center">'b'</td></tr>
+<tr><td style="text-align: center">2</td><td style="text-align: center">33</td><td style="text-align: center">'c'</td></tr>
+<tr><td style="text-align: center">3</td><td style="text-align: center">44</td><td style="text-align: center">'d'</td></tr>
+</tbody></table>
+<h3 id="jie-duan-2-chu-li-probe-side">阶段2:  处理Probe Side</h3>
+<p>流式读取Probe Side的数据进行处理，假设有Probe Side批次如下：</p>
+<table><thead><tr><th style="text-align: center">indices</th><th style="text-align: center">t1_ID</th><th style="text-align: center">T1_NAME</th></tr></thead><tbody>
+<tr><td style="text-align: center">0</td><td style="text-align: center">11</td><td style="text-align: center">'z'</td></tr>
+<tr><td style="text-align: center">1</td><td style="text-align: center">22</td><td style="text-align: center">'y'</td></tr>
+</tbody></table>
+<h4 id="cha-zhao">查找</h4>
+<p>先与哈希表进行匹配。有两条数据匹配:</p>
+<pre><code>t1  [11,&#x27;z&#x27;] [22,&#x27;y&#x27;]
+       ｜        |
+       ｜        |
+t2  [11,&#x27;a&#x27;] [22,&#x27;b&#x27;]
+</code></pre>
+<p>生成相应的索引：</p>
+<pre><code>Build indices: 0, 1
+Probe indices: 0, 1
+</code></pre>
+<h4 id="guo-lu">过滤</h4>
+<p>使用非等值连接条件进行过滤</p>
+<h4 id="chu-li-you-biao-wei-chu-li-de-xing">处理右表未处理的行</h4>
+<p>根据 join 类型调整行索引</p>
+<ol>
+<li>inner join，则不调整</li>
+<li>left join，在第三阶段输出未匹配的左表数据</li>
+<li>right join，追加右表未匹配的行</li>
+<li>full join，跟 right join 类似，不过还会在第三阶段输出未匹配的左表数据</li>
+</ol>
+<h4 id="sheng-cheng-batch">生成Batch</h4>
+<p>通过indices以及projection输出结果</p>
+<hr />
+<h3 id="jie-duan-3-chu-li-zuo-biao-wei-chu-li-de-xing">阶段3: 处理左表未处理的行</h3>
+<p>根据 join 类型进行输出 （在第二阶段会标记哪些行被输出了）</p>
+<ol>
+<li>inner join，则不处理</li>
+<li>full join或者left join，输出未匹配的左表数据</li>
+<li>right join，已经在第二阶段处理了</li>
+</ol>
+<h2 id="you-hua-gui-ze">优化规则</h2>
+<p>TODO</p>
+
+
+            </main>
+            <footer>
+                
+<p class="taxonomies">
+
+</p>
+
+                
+            </footer>
+        </div>
+    </body>
+</html>
+        
